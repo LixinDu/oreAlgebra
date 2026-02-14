@@ -1,0 +1,4 @@
+ore_algebra guide source
+URL: https://www3.risc.jku.at/research/combinat/software/ore_algebra/main.pdf
+Fetched by: scripts/download_ore_guide.sh
+Local target: data/ore_algebra_guide.pdf
