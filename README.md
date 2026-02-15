@@ -11,7 +11,7 @@ Primary source is `generated/symbols.jsonl` (package symbol docs), with optional
 
 - `ore_rag_assistant.py`: index builder CLI (`build-index`) + shared retrieval/index utilities.
 - `streamlit_app.py`: retrieval UI over prebuilt indexes.
-- `streamlit_chat_app.py`: retrieval + LLM synthesis UI (OpenAI/Gemini).
+- `streamlit_chat_app.py`: retrieval + LLM synthesis UI (OpenAI/Gemini/Ollama).
 - `llm_service.py`: provider calls, prompts, parsing for planning/decision/final synthesis.
 - `scripts/download_ore_guide.sh`: fetches external guide PDF.
 
@@ -103,11 +103,19 @@ Gemini option:
 - provider: `gemini`
 - default model: `gemini-2.5-flash`
 
+Ollama option:
+- provider: `ollama`
+- models are auto-detected from local Ollama (`/api/tags`) and shown as selectable model options.
+- optional env vars:
+  - `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
+  - `OLLAMA_MODEL` (fallback model name when auto-detection returns empty)
+
 ## LLM API Keys
 
 You can input keys in the UI, or load from environment / `.env`:
 - OpenAI: `OPENAI_API_KEY`
 - Gemini: `GEMINI_API_KEY` (fallback: `GOOGLE_API_KEY`)
+- Ollama: no API key required (local server)
 
 If UI key is blank and env key exists, the app uses env key automatically.
 

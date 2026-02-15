@@ -6,8 +6,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
-from typing import Callable, List, Sequence
+from typing import Callable, List, Sequence, Tuple
 
 from dotenv import load_dotenv
 
@@ -32,6 +34,7 @@ class LLMRequest:
     provider: str = "openai"
     model: str = "gpt-4o-mini"
     temperature: float = 0.1
+    base_url: str | None = None
 
 
 @dataclass
@@ -187,6 +190,36 @@ def parse_response(raw_text: str, allowed_context_ids: Sequence[str]) -> LLMResp
     )
 
 
+def _normalize_base_url(base_url: str | None, default: str) -> str:
+    value = (base_url or "").strip() or default
+    return value.rstrip("/")
+
+
+def list_ollama_models(base_url: str | None = None, timeout_seconds: float = 3.0) -> Tuple[List[str], str]:
+    """Return available Ollama model names and an optional error message."""
+    root = _normalize_base_url(base_url, os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+    url = f"{root}/api/tags"
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        payload = json.loads(body)
+        raw_models = payload.get("models", [])
+        names: List[str] = []
+        if isinstance(raw_models, list):
+            for item in raw_models:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                if name:
+                    names.append(name)
+        # Stable + unique list for UI.
+        unique_sorted = sorted(set(names))
+        return unique_sorted, ""
+    except Exception as exc:
+        return [], str(exc)
+
+
 def _call_openai(model: str, prompt: str, temperature: float, api_key: str | None) -> str:
     key = api_key or os.getenv("OPENAI_API_KEY")
     if not key:
@@ -330,12 +363,101 @@ def _call_gemini_streaming(
     return "".join(acc)
 
 
+def _call_ollama(
+    model: str,
+    prompt: str,
+    temperature: float,
+    base_url: str | None,
+) -> str:
+    root = _normalize_base_url(base_url, os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+    url = f"{root}/api/generate"
+    payload = {
+        "model": model,
+        "prompt": (
+            "You are a precise ore_algebra assistant. Return valid JSON only.\n\n"
+            f"{prompt}"
+        ),
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": float(temperature)},
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120.0) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Ollama request failed: {exc}") from exc
+
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        raise RuntimeError(f"Ollama returned non-JSON response: {body[:2000]}") from exc
+
+    text = data.get("response")
+    if isinstance(text, str):
+        return text
+    return str(data)
+
+
+def _call_ollama_streaming(
+    model: str,
+    prompt: str,
+    temperature: float,
+    base_url: str | None,
+    on_chunk: Callable[[str, str], None] | None,
+) -> str:
+    root = _normalize_base_url(base_url, os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+    url = f"{root}/api/generate"
+    payload = {
+        "model": model,
+        "prompt": (
+            "You are a precise ore_algebra assistant. Return valid JSON only.\n\n"
+            f"{prompt}"
+        ),
+        "stream": True,
+        "format": "json",
+        "options": {"temperature": float(temperature)},
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    acc: List[str] = []
+    try:
+        with urllib.request.urlopen(req, timeout=300.0) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                piece = item.get("response")
+                if not isinstance(piece, str) or not piece:
+                    continue
+                acc.append(piece)
+                if on_chunk is not None:
+                    on_chunk(piece, "".join(acc))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Ollama streaming request failed: {exc}") from exc
+    return "".join(acc)
+
+
 def _call_llm(
     provider: str,
     model: str,
     prompt: str,
     temperature: float,
     api_key: str | None,
+    base_url: str | None = None,
     stream: bool = False,
     on_chunk: Callable[[str, str], None] | None = None,
 ) -> str:
@@ -359,6 +481,21 @@ def _call_llm(
                 on_chunk=on_chunk,
             )
         return _call_gemini(model=model, prompt=prompt, temperature=temperature, api_key=api_key)
+    if provider == "ollama":
+        if stream:
+            return _call_ollama_streaming(
+                model=model,
+                prompt=prompt,
+                temperature=temperature,
+                base_url=base_url,
+                on_chunk=on_chunk,
+            )
+        return _call_ollama(
+            model=model,
+            prompt=prompt,
+            temperature=temperature,
+            base_url=base_url,
+        )
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
@@ -427,6 +564,7 @@ def plan_subtasks(
     provider: str,
     model: str,
     api_key: str | None = None,
+    base_url: str | None = None,
     max_steps: int = 5,
     temperature: float = 0.1,
 ) -> PlanResponse:
@@ -437,6 +575,7 @@ def plan_subtasks(
         prompt=prompt,
         temperature=temperature,
         api_key=api_key,
+        base_url=base_url,
     )
     try:
         return parse_plan_response(raw_text=raw, max_steps=max_steps, fallback_query=question)
@@ -515,6 +654,7 @@ def decide_next_action(
     provider: str,
     model: str,
     api_key: str | None = None,
+    base_url: str | None = None,
     temperature: float = 0.1,
 ) -> StepDecision:
     prompt = build_decision_prompt(
@@ -528,6 +668,7 @@ def decide_next_action(
         prompt=prompt,
         temperature=temperature,
         api_key=api_key,
+        base_url=base_url,
     )
     try:
         return parse_decision_response(raw)
@@ -555,6 +696,7 @@ def answer_with_llm(
         prompt=prompt,
         temperature=request.temperature,
         api_key=api_key,
+        base_url=request.base_url,
         stream=stream,
         on_chunk=on_chunk,
     )
@@ -579,5 +721,6 @@ Output to fix:
         prompt=repair_prompt,
         temperature=0.1,
         api_key=api_key,
+        base_url=request.base_url,
     )
     return parse_response(repaired, allowed_context_ids=allowed_ids)

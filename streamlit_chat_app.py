@@ -9,7 +9,16 @@ from typing import List
 
 import streamlit as st
 
-from llm_service import ContextItem, LLMRequest, LLMResponse, Subtask, answer_with_llm, decide_next_action, plan_subtasks
+from llm_service import (
+    ContextItem,
+    LLMRequest,
+    LLMResponse,
+    Subtask,
+    answer_with_llm,
+    decide_next_action,
+    list_ollama_models,
+    plan_subtasks,
+)
 from ore_rag_assistant import (
     RetrievalResult,
     load_index,
@@ -142,6 +151,11 @@ def _render_step_header(step: Subtask, step_query: str) -> None:
     st.write(f"query: `{step_query}`")
 
 
+@st.cache_data(ttl=5)
+def _cached_ollama_models(base_url: str) -> tuple[list[str], str]:
+    return list_ollama_models(base_url=base_url)
+
+
 def main() -> None:
     st.set_page_config(page_title="ore_algebra Planner", layout="wide")
     st.title("ore_algebra Planner")
@@ -161,25 +175,50 @@ def main() -> None:
         final_context_limit = st.slider("Final synthesis context count", min_value=2, max_value=30, value=10)
 
         st.header("LLM")
-        provider = st.selectbox("Provider", ["openai", "gemini"], index=0)
-        default_model = "gpt-4o-mini" if provider == "openai" else "gemini-2.5-flash"
-        model = st.text_input("Model", default_model)
+        provider = st.selectbox("Provider", ["openai", "gemini", "ollama"], index=0)
         temperature = st.slider("Temperature", min_value=0.0, max_value=1.0, value=0.1, step=0.05)
-        api_key_label = (
-            "OPENAI_API_KEY (optional; else env OPENAI_API_KEY)"
-            if provider == "openai"
-            else "GEMINI_API_KEY (optional; else env GEMINI_API_KEY/GOOGLE_API_KEY)"
-        )
-        api_key = st.text_input(api_key_label, type="password")
-        has_default_key = (
-            bool(os.getenv("OPENAI_API_KEY"))
-            if provider == "openai"
-            else bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
-        )
-        if not api_key and has_default_key:
-            st.caption("No key entered. Using key from `.env`/environment.")
-        elif not api_key:
-            st.caption("No key entered and no default key detected in `.env`/environment.")
+        api_key = ""
+        llm_base_url: str | None = None
+
+        if provider == "openai":
+            model = st.text_input("Model", "gpt-4o-mini")
+            api_key = st.text_input(
+                "OPENAI_API_KEY (optional; else env OPENAI_API_KEY)",
+                type="password",
+            )
+            has_default_key = bool(os.getenv("OPENAI_API_KEY"))
+            if not api_key and has_default_key:
+                st.caption("No key entered. Using key from `.env`/environment.")
+            elif not api_key:
+                st.caption("No key entered and no default key detected in `.env`/environment.")
+        elif provider == "gemini":
+            model = st.text_input("Model", "gemini-2.5-flash")
+            api_key = st.text_input(
+                "GEMINI_API_KEY (optional; else env GEMINI_API_KEY/GOOGLE_API_KEY)",
+                type="password",
+            )
+            has_default_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+            if not api_key and has_default_key:
+                st.caption("No key entered. Using key from `.env`/environment.")
+            elif not api_key:
+                st.caption("No key entered and no default key detected in `.env`/environment.")
+        else:
+            llm_base_url = st.text_input(
+                "Ollama base URL",
+                value=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            ).strip()
+            detected_models, detect_error = _cached_ollama_models(llm_base_url or "http://localhost:11434")
+            if detected_models:
+                selected_model = st.selectbox("Model options (detected)", detected_models, index=0)
+                custom_model = st.text_input("Model override (optional)", "")
+                model = custom_model.strip() or selected_model
+                st.caption(f"Detected {len(detected_models)} Ollama model(s).")
+            else:
+                model = st.text_input("Model", os.getenv("OLLAMA_MODEL", "llama3.1"))
+                st.caption("No model detected yet. Run `ollama pull <model>` and refresh.")
+                if detect_error:
+                    st.caption(f"Detection detail: {detect_error}")
+            st.caption("Ollama runs locally; API key is not required.")
 
     question = st.chat_input("Ask a question about ore_algebra...")
     if question:
@@ -216,6 +255,7 @@ def main() -> None:
                 provider=provider,
                 model=model,
                 api_key=api_key or None,
+                base_url=llm_base_url,
                 max_steps=max_plan_steps,
                 temperature=temperature,
             )
@@ -261,6 +301,7 @@ def main() -> None:
             provider=provider,
             model=model,
             api_key=api_key or None,
+            base_url=llm_base_url,
             temperature=temperature,
         )
         st.write(f"next action: `{decision.action}`")
@@ -312,6 +353,7 @@ def main() -> None:
         provider=provider,
         model=model,
         temperature=temperature,
+        base_url=llm_base_url,
     )
 
     try:
