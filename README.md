@@ -125,3 +125,9 @@ For index path `X.json`, build produces:
 - When both sources exist, source priority defaults to symbols-first behavior.
 - Generated symbol contexts are kept full; PDF contexts are truncated in chat by UI limits.
 - Some LLM models reject certain explicit parameter values (for example temperature); choose model-compatible values in the chat UI.
+
+
+## License
+Distributed under the terms of the GNU General Public License (GPL, see the COPYING file), either version 2 or (at your option) any later version
+
+https://www.gnu.org/licenses/
