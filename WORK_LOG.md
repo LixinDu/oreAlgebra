@@ -160,3 +160,52 @@ python3 ore_rag_assistant.py build-index \
 # Start LLM chat UI
 streamlit run streamlit_chat_app.py
 ```
+
+## Update (Agentic Step Loop + Final Synthesis Streaming)
+- Updated `streamlit_chat_app.py` to execute the step workflow:
+  - plan subtasks,
+  - retrieve per step,
+  - decide next action,
+  - then run final synthesis for answer/code.
+- Added final synthesis context aggregation:
+  - deduplicate retrieved chunks across steps,
+  - cap by configurable final context count.
+- Added visible streaming status for final synthesis in Streamlit:
+  - shows live provider output while final answer is being generated.
+- Added question persistence in UI:
+  - latest submitted question stays visible after input.
+
+## Update (LLM Runtime Controls and Defaults)
+- Added UI temperature control in `streamlit_chat_app.py` (default `0.1`).
+- Propagated temperature through planning, step-decision, and final synthesis calls.
+- Changed chat defaults to:
+  - provider: `openai`
+  - model: `gpt-4o-mini`
+- Important runtime note:
+  - no automatic retry/fallback is implemented when a model rejects explicit `temperature`;
+    choose a compatible model/temperature in the UI.
+
+## Current Recommended Run (Planner + Synthesis Chat)
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Build combined index (generated docs + PDF support)
+python3 ore_rag_assistant.py build-index \
+  --source-mode both \
+  --generated-symbols generated/symbols.jsonl \
+  --pdf data/ore_algebra_guide.pdf \
+  --include-generated-api-md \
+  --generated-api-md generated/API_REFERENCE.md \
+  --index-path .rag/ore_algebra_both_index.json
+
+# Start planner/synthesis chat UI
+streamlit run streamlit_chat_app.py
+```
+
+## Update (Docs Sync for Current Runtime)
+- Updated `ARCHITECTURE_NOTE.md` and `WORK_LOG.md` to match current behavior.
+- Clarified temperature handling:
+  - default UI temperature is `0.1`,
+  - model compatibility is user-controlled from UI,
+  - there is no automatic provider temperature fallback in code.

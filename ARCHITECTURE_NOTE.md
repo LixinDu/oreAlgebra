@@ -33,10 +33,16 @@ This project organizes vector stores for `ore_algebra` documentation and provide
 5. Runtime Apps
 - `ore_rag_assistant.py` CLI is restricted to vector-store organization (`build-index`).
 - `streamlit_app.py` is a retrieval-only UI that runs retrieval in background and displays context/citations.
-- `streamlit_chat_app.py` performs retrieval, sends question + top-k context to an LLM, and displays answer/code/citations.
-- `llm_service.py` is the provider adapter for prompt building, provider calls, and structured response parsing.
+- `streamlit_chat_app.py` runs an agentic flow:
+  - plan subtasks,
+  - retrieve per step,
+  - decide next action (`continue` / `refine_query` / `stop`),
+  - final synthesis to answer/code.
+- `streamlit_chat_app.py` streams final synthesis output live in the UI status panel.
+- `llm_service.py` is the provider adapter for planning, decision, and final synthesis prompts/calls/parsing.
 - LLM providers supported: `openai` and `gemini`.
 - API keys can be provided in UI or loaded automatically from `.env` (`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`).
+- Current chat defaults: provider `openai`, model `gpt-4o-mini`, temperature configurable in UI (default `0.1`).
 
 ## Repository Structure
 ```text
@@ -67,9 +73,11 @@ oreAlgebra/
 3. Build index with `ore_rag_assistant.py build-index` (`generated`, `pdf`, or `both`).
 4. Start one app:
 - `streamlit_app.py` for retrieval-only inspection.
-- `streamlit_chat_app.py` for retrieval + LLM answer generation.
-5. For chat app, choose provider/model and submit question.
-6. App retrieves top-k context (symbols-first policy), calls selected LLM, and maps returned context IDs to citations.
+- `streamlit_chat_app.py` for agentic retrieval + LLM answer generation.
+5. For chat app, choose provider/model/temperature and submit question.
+   - Use model-compatible temperature values (some models reject explicit values).
+6. App runs plan -> retrieve per step -> decide next action.
+7. App aggregates retrieved context and runs final synthesis, then maps returned context IDs to citations.
 
 ## Run Commands
 ```bash
@@ -122,6 +130,8 @@ python3 ore_rag_assistant.py build-index \
 - Context volume: full symbol text can be large; UI and downstream consumers should manage token/length budgets.
 - Provider output variance: different LLM providers/models may format JSON or code differently.
 - Key management risk: missing/incorrect `.env` keys cause runtime LLM call failures.
+- Agent-loop drift risk: multi-step planning can choose suboptimal subtasks/queries without strong constraints.
+- Runtime compatibility risk: some models may reject explicit parameter values; set model-compatible values in UI.
 
 ## Regular Updates
 - Last updated: 2026-02-15
@@ -140,6 +150,8 @@ python3 ore_rag_assistant.py build-index \
 
 ## Update Entries (Append Only)
 <!-- UPDATE_ENTRIES_START -->
+- 2026-02-15: Synced docs with current runtime behavior; clarified there is no automatic provider temperature fallback and model-compatible temperature must be set in UI.
+- 2026-02-15: Added agentic chat flow (plan/retrieve/decide/final synthesis), streamed final synthesis status in UI, temperature control in UI, and default chat model/provider update (`openai` + `gpt-4o-mini`).
 - 2026-02-15: Added LLM chat architecture (`streamlit_chat_app.py` + `llm_service.py`), provider selection (OpenAI/Gemini), and `.env` key fallback behavior.
 - 2026-02-15: Reworked architecture to index-builder + retrieval-only Streamlit app; added generated-doc source model and symbols-first retrieval policy notes.
 - 2026-02-14: Added maintainer edit policy and append-only update log markers.

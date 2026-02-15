@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Streamlit chat app: retrieve context, call LLM, and show cited answer."""
+"""Streamlit agent app: plan -> retrieve per step -> decide -> final synthesis."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
 import streamlit as st
 
-from llm_service import ContextItem, LLMRequest, LLMResponse, answer_with_llm
+from llm_service import ContextItem, LLMRequest, LLMResponse, Subtask, answer_with_llm, decide_next_action, plan_subtasks
 from ore_rag_assistant import (
     RetrievalResult,
     load_index,
@@ -54,8 +54,19 @@ def _to_context_items(results: List[RetrievalResult], pdf_char_limit: int) -> Li
     return items
 
 
+def _dedupe_results_by_chunk(results: List[RetrievalResult]) -> List[RetrievalResult]:
+    seen = set()
+    out: List[RetrievalResult] = []
+    for r in results:
+        if r.chunk_id in seen:
+            continue
+        seen.add(r.chunk_id)
+        out.append(r)
+    return out
+
+
 def _citation_lines(response: LLMResponse, context_items: List[ContextItem]) -> str:
-    ctx_by_id: Dict[str, ContextItem] = {c.context_id: c for c in context_items}
+    ctx_by_id = {c.context_id: c for c in context_items}
     lines: List[str] = []
     for cid in response.citations_used:
         item = ctx_by_id.get(cid)
@@ -67,9 +78,9 @@ def _citation_lines(response: LLMResponse, context_items: List[ContextItem]) -> 
     return "\n".join(lines)
 
 
-def _render_retrieval_results(results: List[RetrievalResult], pdf_char_limit: int) -> None:
+def _render_retrieval_results(results: List[RetrievalResult], pdf_char_limit: int, key_prefix: str) -> None:
     st.subheader("Retrieved Context")
-    for r in results:
+    for idx, r in enumerate(results):
         with st.expander(_result_title(r), expanded=False):
             st.write(f"source_type: `{r.source_type}`")
             st.write(f"source: `{r.source}`")
@@ -79,19 +90,62 @@ def _render_retrieval_results(results: List[RetrievalResult], pdf_char_limit: in
                 if r.module:
                     st.write(f"module: `{r.module}`")
                 st.write(f"location: `{location_label(r)}`")
-                st.text_area("content", value=r.text, height=260, key=f"text-{r.chunk_id}")
+                st.text_area(
+                    "content",
+                    value=r.text,
+                    height=260,
+                    key=f"text-{key_prefix}-{idx}-{r.chunk_id}-gen",
+                )
             else:
                 section = r.section_title or "unknown"
                 st.write(f"pages: `{r.page_start}-{r.page_end}`")
                 st.write(f"section: `{section}`")
                 preview = r.text[:pdf_char_limit] if len(r.text) > pdf_char_limit else r.text
-                st.text_area("content", value=preview, height=260, key=f"text-{r.chunk_id}")
+                st.text_area(
+                    "content",
+                    value=preview,
+                    height=260,
+                    key=f"text-{key_prefix}-{idx}-{r.chunk_id}-pdf",
+                )
+
+
+def _run_retrieval_for_query(
+    *,
+    query: str,
+    payload: dict,
+    chunks: list,
+    k: int,
+    mode: str,
+    index_path: Path,
+    hybrid_alpha: float,
+    source_priority: str,
+    symbols_ratio: float,
+    max_pdf_extras: int,
+) -> tuple[str, List[RetrievalResult]]:
+    return select_retrieval(
+        index_payload=payload,
+        chunks=chunks,
+        query=query,
+        k=k,
+        mode=mode,
+        index_path=index_path,
+        hybrid_alpha=hybrid_alpha,
+        source_priority=source_priority,
+        symbols_ratio=symbols_ratio,
+        max_pdf_extras=max_pdf_extras,
+    )
+
+
+def _render_step_header(step: Subtask, step_query: str) -> None:
+    st.markdown(f"### Step {step.step_id}: {step.title}")
+    st.write(f"instruction: {step.instruction}")
+    st.write(f"query: `{step_query}`")
 
 
 def main() -> None:
-    st.set_page_config(page_title="ore_algebra Chat", layout="wide")
-    st.title("ore_algebra Chat")
-    st.caption("Retrieves top-k context, then sends question + context to LLM.")
+    st.set_page_config(page_title="ore_algebra Planner", layout="wide")
+    st.title("ore_algebra Planner")
+    st.caption("Implements: plan subtasks -> retrieve per step -> decide next action -> final synthesis.")
 
     with st.sidebar:
         st.header("Index + Retrieval")
@@ -103,11 +157,14 @@ def main() -> None:
         symbols_ratio = st.slider("Symbols ratio", min_value=0.0, max_value=1.0, value=0.75)
         max_pdf_extras = st.slider("Max PDF extras", min_value=0, max_value=10, value=2)
         pdf_char_limit = st.slider("PDF chars per context", min_value=400, max_value=3000, value=1600)
+        max_plan_steps = st.slider("Max plan steps", min_value=1, max_value=10, value=4)
+        final_context_limit = st.slider("Final synthesis context count", min_value=2, max_value=30, value=10)
 
         st.header("LLM")
         provider = st.selectbox("Provider", ["openai", "gemini"], index=0)
-        default_model = "gpt-4.1-mini" if provider == "openai" else "gemini-1.5-pro"
+        default_model = "gpt-4o-mini" if provider == "openai" else "gemini-2.5-flash"
         model = st.text_input("Model", default_model)
+        temperature = st.slider("Temperature", min_value=0.0, max_value=1.0, value=0.1, step=0.05)
         api_key_label = (
             "OPENAI_API_KEY (optional; else env OPENAI_API_KEY)"
             if provider == "openai"
@@ -125,9 +182,19 @@ def main() -> None:
             st.caption("No key entered and no default key detected in `.env`/environment.")
 
     question = st.chat_input("Ask a question about ore_algebra...")
+    if question:
+        st.session_state["last_question"] = question
+
     if not question:
+        last_question = st.session_state.get("last_question", "")
+        if last_question:
+            st.subheader("Last Question")
+            st.markdown(last_question)
         st.info("Enter a question to run retrieval + LLM answering.")
         return
+
+    st.subheader("User Question")
+    st.markdown(question)
 
     idx = Path(index_path).expanduser().resolve()
     if not idx.exists():
@@ -135,13 +202,79 @@ def main() -> None:
         return
 
     try:
-        with st.spinner("Loading index and retrieving context..."):
+        with st.spinner("Loading index..."):
             payload = load_index(idx)
             chunks = parse_chunks(payload)
-            mode_used, results = select_retrieval(
-                index_payload=payload,
+    except Exception as exc:
+        st.error(f"Index load failed: {exc}")
+        return
+
+    try:
+        with st.spinner("Planning subtasks..."):
+            plan = plan_subtasks(
+                question=question,
+                provider=provider,
+                model=model,
+                api_key=api_key or None,
+                max_steps=max_plan_steps,
+                temperature=temperature,
+            )
+    except Exception as exc:
+        st.error(f"Planning failed: {exc}")
+        return
+
+    st.subheader("Plan")
+    if not plan.subtasks:
+        st.warning("Planner returned no subtasks.")
+        return
+
+    aggregated_results: List[RetrievalResult] = []
+
+    for subtask in plan.subtasks:
+        step_query = subtask.retrieval_query or subtask.instruction or subtask.title
+        _render_step_header(subtask, step_query=step_query)
+
+        mode_used, results = _run_retrieval_for_query(
+            query=step_query,
+            payload=payload,
+            chunks=chunks,
+            k=k,
+            mode=mode,
+            index_path=idx,
+            hybrid_alpha=hybrid_alpha,
+            source_priority=source_priority,
+            symbols_ratio=symbols_ratio,
+            max_pdf_extras=max_pdf_extras,
+        )
+        st.write(f"retrieval mode: `{mode_used}`, results: `{len(results)}`")
+        _render_retrieval_results(
+            results=results,
+            pdf_char_limit=pdf_char_limit,
+            key_prefix=f"step-{subtask.step_id}-base",
+        )
+        context_items = _to_context_items(results=results, pdf_char_limit=pdf_char_limit)
+
+        decision = decide_next_action(
+            question=question,
+            current_step=subtask,
+            context_items=context_items,
+            provider=provider,
+            model=model,
+            api_key=api_key or None,
+            temperature=temperature,
+        )
+        st.write(f"next action: `{decision.action}`")
+        if decision.reason:
+            st.write(f"reason: {decision.reason}")
+        st.write(f"confidence: {decision.confidence:.2f}")
+
+        step_effective_results = results
+        if decision.action == "refine_query" and decision.next_query.strip():
+            st.write(f"refine query: `{decision.next_query}`")
+            mode_used2, refined_results = _run_retrieval_for_query(
+                query=decision.next_query.strip(),
+                payload=payload,
                 chunks=chunks,
-                query=question,
                 k=k,
                 mode=mode,
                 index_path=idx,
@@ -150,42 +283,69 @@ def main() -> None:
                 symbols_ratio=symbols_ratio,
                 max_pdf_extras=max_pdf_extras,
             )
-            context_items = _to_context_items(results=results, pdf_char_limit=pdf_char_limit)
-    except Exception as exc:
-        st.error(f"Retrieval failed: {exc}")
+            st.write(f"refined retrieval mode: `{mode_used2}`, results: `{len(refined_results)}`")
+            _render_retrieval_results(
+                results=refined_results,
+                pdf_char_limit=pdf_char_limit,
+                key_prefix=f"step-{subtask.step_id}-refined",
+            )
+            step_effective_results = refined_results
+
+        aggregated_results.extend(step_effective_results)
+
+        if decision.action == "stop":
+            st.info("Workflow stopped by agent decision.")
+            break
+
+    aggregated_results = _dedupe_results_by_chunk(aggregated_results)[:final_context_limit]
+    if not aggregated_results:
+        st.warning("No aggregated context available for final synthesis.")
         return
 
-    st.success(f"Retrieved {len(results)} contexts using `{mode_used}` mode.")
-    _render_retrieval_results(results=results, pdf_char_limit=pdf_char_limit)
-
+    final_context_items = _to_context_items(
+        results=aggregated_results,
+        pdf_char_limit=pdf_char_limit,
+    )
     request = LLMRequest(
         question=question,
-        contexts=context_items,
+        contexts=final_context_items,
         provider=provider,
         model=model,
-        temperature=0.0,
+        temperature=temperature,
     )
 
     try:
-        with st.spinner("Calling LLM..."):
-            response = answer_with_llm(request=request, api_key=api_key or None)
+        with st.status("Final synthesis with LLM...", expanded=True) as status:
+            live_placeholder = st.empty()
+
+            def _on_chunk(_piece: str, acc_text: str) -> None:
+                # Show the live JSON stream coming from the provider.
+                live_placeholder.code(acc_text[-6000:], language="json")
+
+            final_response = answer_with_llm(
+                request=request,
+                api_key=api_key or None,
+                stream=True,
+                on_chunk=_on_chunk,
+            )
+            status.update(label="Final synthesis complete", state="complete")
     except Exception as exc:
-        st.error(f"LLM request failed: {exc}")
+        st.error(f"Final synthesis failed: {exc}")
         return
 
-    st.subheader("Answer")
-    st.markdown(response.answer or "(No answer returned)")
+    st.subheader("Final Answer")
+    st.markdown(final_response.answer or "(No answer returned)")
 
-    if response.code.strip():
+    if final_response.code.strip():
         st.subheader("Generated Code")
-        st.code(response.code, language="python")
+        st.code(final_response.code, language="python")
 
-    st.subheader("Citations Used")
-    st.code(_citation_lines(response, context_items), language="text")
+    st.subheader("Final Citations")
+    st.code(_citation_lines(final_response, final_context_items), language="text")
 
-    if response.missing_info:
+    if final_response.missing_info:
         st.subheader("Missing Info")
-        st.write("\n".join(f"- {item}" for item in response.missing_info))
+        st.write("\n".join(f"- {item}" for item in final_response.missing_info))
 
 
 if __name__ == "__main__":
