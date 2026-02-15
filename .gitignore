@@ -44,3 +44,7 @@ data/*.pdf
 # Generated package docs/artifacts (local build inputs/outputs)
 generated/*
 !generated/.gitkeep
+
+# Local project notes/logs (do not commit)
+ARCHITECTURE_NOTE.md
+WORK_LOG.md
