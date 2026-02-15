@@ -66,3 +66,57 @@ python3 ore_rag_assistant.py answer --index-path .rag/ore_algebra_index.json --q
   - `data/.gitkeep`
   - `indexes/.gitkeep`
 - Updated defaults/docs to use `data/ore_algebra_guide.pdf` instead of a committed root PDF.
+
+## Sunday, 15 February 2026
+## Update (Source Organization + Retrieval App Split)
+- Reworked source organization to treat generated package docs as primary:
+  - Added ingestion for `generated/symbols.jsonl` (symbol-level chunks).
+  - Added optional ingestion for `generated/API_REFERENCE.md`.
+  - Added source modes: `pdf`, `generated`, `both`.
+- Added source-aware chunk metadata and citations:
+  - Generated chunks now carry symbol/module/signature/location fields.
+  - PDF chunks keep page/section metadata.
+- Added mixed-source retrieval policy controls:
+  - `--source-priority {auto,flat,symbols-first}`
+  - `--symbols-ratio`
+  - `--max-pdf-extras`
+- Added symbols-first organization/retrieval defaults for combined indexes.
+- Updated retrieval/context behavior:
+  - Generated symbol content is preserved in full.
+  - PDF content remains truncated for compact support context.
+
+## Update (App/CLI Responsibilities)
+- Restricted `ore_rag_assistant.py` CLI to vector-store organization only:
+  - Kept `build-index`.
+  - Removed `retrieve` and `answer` subcommands from CLI surface.
+- Added separate retrieval UI app:
+  - `streamlit_app.py` performs retrieval in background from built indexes.
+  - Displays retrieved contexts and citations.
+- Removed OpenAI requirement from retrieval app workflow.
+
+## Dependency Notes (Current)
+- Requirements now focus on indexing + retrieval:
+  - `pypdf`
+  - `sentence-transformers`
+  - `numpy`
+  - `faiss-cpu`
+  - `streamlit`
+- `openai` removed from `requirements.txt` for the current retrieval-only app path.
+
+## Current Recommended Run (Latest)
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Build combined index (generated docs + PDF support)
+python3 ore_rag_assistant.py build-index \
+  --source-mode both \
+  --generated-symbols generated/symbols.jsonl \
+  --pdf data/ore_algebra_guide.pdf \
+  --include-generated-api-md \
+  --generated-api-md generated/API_REFERENCE.md \
+  --index-path .rag/ore_algebra_both_index.json
+
+# Start retrieval UI
+streamlit run streamlit_app.py
+```

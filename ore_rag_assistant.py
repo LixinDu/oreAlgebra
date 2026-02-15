@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""RAG assistant for the ore_algebra user guide PDF.
+"""Vector-store organizer for ore_algebra docs.
 
 Features:
-- Extracts PDF text with page numbers.
-- Detects likely section titles.
-- Chunks pages with overlap while preserving page metadata.
+- Extracts and chunks PDF text with page metadata.
+- Extracts symbol-level docs from generated JSONL metadata.
 - Builds a persisted hybrid index: FAISS vector store + lexical TF-IDF.
-- Uses dense, lexical, or hybrid retrieval (hybrid default).
-- Generates SageMath code using an LLM (OpenAI optional).
-- Optionally verifies and repairs code by running `sage -python`.
+- Retrieval/generation helpers are available as importable functions.
 """
 
 from __future__ import annotations
@@ -45,21 +42,41 @@ class Page:
 class Chunk:
     chunk_id: int
     text: str
-    page_start: int
-    page_end: int
-    section_title: str
     source: str
+    source_type: str = "pdf"
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    section_title: str = ""
+    symbol_id: str = ""
+    module: str = ""
+    qualname: str = ""
+    signature: str = ""
+    kind: str = ""
+    file_path: str = ""
+    line: Optional[int] = None
+    summary: str = ""
+    example_count: int = 0
 
 
 @dataclass
 class RetrievalResult:
     chunk_id: int
     score: float
-    page_start: int
-    page_end: int
-    section_title: str
     source: str
     text: str
+    source_type: str = "pdf"
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    section_title: str = ""
+    symbol_id: str = ""
+    module: str = ""
+    qualname: str = ""
+    signature: str = ""
+    kind: str = ""
+    file_path: str = ""
+    line: Optional[int] = None
+    summary: str = ""
+    example_count: int = 0
 
 
 def utc_now_iso() -> str:
@@ -146,10 +163,11 @@ def chunk_pages(
             Chunk(
                 chunk_id=chunk_id,
                 text=text,
+                source=source,
+                source_type="pdf",
                 page_start=pages[start].page,
                 page_end=pages[end - 1].page,
                 section_title=section,
-                source=source,
             )
         )
         chunk_id += 1
@@ -170,6 +188,193 @@ def chunk_pages(
             i = start + 1
 
     return chunks
+
+
+def _safe_int(value: object) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_str(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _safe_examples_list(value: object) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        s = _safe_str(item)
+        if s:
+            out.append(s)
+    return out
+
+
+def extract_generated_symbol_chunks(symbols_path: Path) -> List[Chunk]:
+    if not symbols_path.exists():
+        raise FileNotFoundError(f"Generated symbols file not found: {symbols_path}")
+
+    chunks: List[Chunk] = []
+    for line_no, raw_line in enumerate(symbols_path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Invalid JSON at {symbols_path}:{line_no}: {exc.msg}"
+            ) from exc
+        if not isinstance(rec, dict):
+            continue
+
+        symbol_id = _safe_str(rec.get("id"))
+        module = _safe_str(rec.get("module"))
+        qualname = _safe_str(rec.get("qualname"))
+        signature = _safe_str(rec.get("signature"))
+        kind = _safe_str(rec.get("kind"))
+        file_path = _safe_str(rec.get("file_path"))
+        source_line = _safe_int(rec.get("line"))
+        summary = _safe_str(rec.get("summary"))
+        docstring = _safe_str(rec.get("docstring"))
+        examples = _safe_examples_list(rec.get("examples"))
+        example_count = _safe_int(rec.get("example_count")) or len(examples)
+
+        display_name = qualname or symbol_id or "unknown_symbol"
+        text_parts = [
+            f"Symbol: {display_name}",
+            f"ID: {symbol_id or display_name}",
+            f"Module: {module or 'unknown'}",
+            f"Kind: {kind or 'unknown'}",
+            f"Signature: {signature or 'unknown'}",
+        ]
+        if summary:
+            text_parts.append(f"Summary: {summary}")
+        if docstring:
+            text_parts.append(f"Docstring:\n{docstring}")
+        if examples:
+            rendered_examples = "\n".join(f"- {ex}" for ex in examples[:10])
+            text_parts.append(f"Examples:\n{rendered_examples}")
+
+        # Repeat key tokens once to improve lexical matching for API names/signatures.
+        search_keys = " ".join(
+            part for part in [symbol_id, qualname, signature, module] if part
+        )
+        if search_keys:
+            text_parts.append(f"Search keys: {search_keys}")
+
+        chunks.append(
+            Chunk(
+                chunk_id=len(chunks),
+                text="\n".join(text_parts).strip(),
+                source=symbols_path.name,
+                source_type="generated",
+                section_title=module,
+                symbol_id=symbol_id,
+                module=module,
+                qualname=qualname,
+                signature=signature,
+                kind=kind,
+                file_path=file_path,
+                line=source_line,
+                summary=summary,
+                example_count=example_count,
+            )
+        )
+
+    if not chunks:
+        raise RuntimeError(f"No symbol records parsed from: {symbols_path}")
+    return chunks
+
+
+def extract_api_reference_chunks(api_reference_path: Path, chunk_chars: int = 2400) -> List[Chunk]:
+    if not api_reference_path.exists():
+        return []
+
+    text = api_reference_path.read_text(encoding="utf-8")
+    if not text.strip():
+        return []
+
+    sections: List[Tuple[str, str]] = []
+    current_title = "API Reference"
+    current_lines: List[str] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current_lines:
+                sections.append((current_title, "\n".join(current_lines).strip()))
+            current_title = line.lstrip("#").strip().strip("`")
+            current_lines = [line]
+            continue
+        current_lines.append(line)
+    if current_lines:
+        sections.append((current_title, "\n".join(current_lines).strip()))
+
+    chunks: List[Chunk] = []
+    for title, body in sections:
+        if not body:
+            continue
+        start = 0
+        while start < len(body):
+            end = min(len(body), start + chunk_chars)
+            chunk_text = body[start:end].strip()
+            if chunk_text:
+                chunks.append(
+                    Chunk(
+                        chunk_id=len(chunks),
+                        text=chunk_text,
+                        source=api_reference_path.name,
+                        source_type="generated",
+                        section_title=title,
+                        module=title,
+                        kind="module_reference",
+                    )
+                )
+            if end >= len(body):
+                break
+            start = max(end - 250, start + 1)
+
+    return chunks
+
+
+def chunk_to_result(chunk: Chunk, score: float) -> RetrievalResult:
+    return RetrievalResult(
+        chunk_id=chunk.chunk_id,
+        score=float(score),
+        source=chunk.source,
+        text=chunk.text,
+        source_type=chunk.source_type,
+        page_start=chunk.page_start,
+        page_end=chunk.page_end,
+        section_title=chunk.section_title,
+        symbol_id=chunk.symbol_id,
+        module=chunk.module,
+        qualname=chunk.qualname,
+        signature=chunk.signature,
+        kind=chunk.kind,
+        file_path=chunk.file_path,
+        line=chunk.line,
+        summary=chunk.summary,
+        example_count=chunk.example_count,
+    )
+
+
+def location_label(result: RetrievalResult) -> str:
+    if result.file_path:
+        if result.line is not None:
+            return f"{result.file_path}:{result.line}"
+        return result.file_path
+    if result.source_type == "pdf":
+        if result.page_start is not None and result.page_end is not None:
+            return f"pp. {result.page_start}-{result.page_end}"
+        if result.page_start is not None:
+            return f"p. {result.page_start}"
+    return result.source
 
 
 def build_lexical_payload(chunks: List[Chunk]) -> Dict[str, object]:
@@ -251,17 +456,7 @@ def lexical_search(
     out: List[RetrievalResult] = []
     for idx, score in top:
         c = chunks[idx]
-        out.append(
-            RetrievalResult(
-                chunk_id=c.chunk_id,
-                score=float(score),
-                page_start=c.page_start,
-                page_end=c.page_end,
-                section_title=c.section_title,
-                source=c.source,
-                text=c.text,
-            )
-        )
+        out.append(chunk_to_result(c, score))
     return out
 
 
@@ -281,7 +476,8 @@ def require_dense_index(index_payload: Dict[str, object], mode: str) -> Dict[str
         raise RuntimeError(
             f"{mode} retrieval requires embeddings + vector store metadata. "
             "Rebuild index with: "
-            "python3 ore_rag_assistant.py build-index --pdf data/ore_algebra_guide.pdf"
+            "python3 ore_rag_assistant.py build-index --source-mode pdf --pdf data/ore_algebra_guide.pdf "
+            "(or use --mode lexical)."
         )
     return dense
 
@@ -347,17 +543,7 @@ def dense_search(
     out: List[RetrievalResult] = []
     for idx, score in ranked:
         c = chunks[idx]
-        out.append(
-            RetrievalResult(
-                chunk_id=c.chunk_id,
-                score=float(score),
-                page_start=c.page_start,
-                page_end=c.page_end,
-                section_title=c.section_title,
-                source=c.source,
-                text=c.text,
-            )
-        )
+        out.append(chunk_to_result(c, score))
     return out
 
 
@@ -370,6 +556,86 @@ def _normalize_score_map(score_map: Dict[int, float]) -> Dict[int, float]:
     if hi - lo < 1e-12:
         return {k: 1.0 for k in score_map}
     return {k: (v - lo) / (hi - lo) for k, v in score_map.items()}
+
+
+def has_source(chunks: List[Chunk], source_type: str) -> bool:
+    return any(c.source_type == source_type for c in chunks)
+
+
+def dedupe_results(results: List[RetrievalResult]) -> List[RetrievalResult]:
+    seen = set()
+    out: List[RetrievalResult] = []
+    for r in results:
+        if r.chunk_id in seen:
+            continue
+        seen.add(r.chunk_id)
+        out.append(r)
+    return out
+
+
+def apply_source_priority(
+    results: List[RetrievalResult],
+    k: int,
+    source_priority: str,
+    symbols_ratio: float,
+    max_pdf_extras: int,
+    index_has_generated: bool,
+    index_has_pdf: bool,
+) -> List[RetrievalResult]:
+    if source_priority not in {"auto", "flat", "symbols-first"}:
+        raise RuntimeError(f"Unsupported source-priority: {source_priority}")
+    if not (0.0 <= symbols_ratio <= 1.0):
+        raise RuntimeError(f"--symbols-ratio must be between 0 and 1, got {symbols_ratio}")
+    if max_pdf_extras < 0:
+        raise RuntimeError(f"--max-pdf-extras must be >= 0, got {max_pdf_extras}")
+
+    if source_priority == "auto":
+        if index_has_generated and index_has_pdf:
+            source_priority = "symbols-first"
+        else:
+            source_priority = "flat"
+
+    ranked = dedupe_results(results)
+    if source_priority == "flat":
+        return ranked[:k]
+
+    generated = [r for r in ranked if r.source_type == "generated"]
+    pdf = [r for r in ranked if r.source_type == "pdf"]
+    other = [r for r in ranked if r.source_type not in {"generated", "pdf"}]
+
+    if not generated:
+        return ranked[:k]
+
+    target_symbols = int(round(k * symbols_ratio))
+    if target_symbols <= 0:
+        target_symbols = 1
+    target_symbols = min(target_symbols, len(generated), k)
+
+    selected: List[RetrievalResult] = []
+    selected.extend(generated[:target_symbols])
+    remaining = k - len(selected)
+
+    if remaining > 0 and pdf:
+        take_pdf = min(remaining, len(pdf), max_pdf_extras)
+        selected.extend(pdf[:take_pdf])
+        remaining = k - len(selected)
+
+    if remaining > 0:
+        selected.extend(generated[target_symbols:target_symbols + remaining])
+        remaining = k - len(selected)
+
+    if remaining > 0 and pdf:
+        already = {r.chunk_id for r in selected}
+        pdf_rest = [r for r in pdf if r.chunk_id not in already]
+        selected.extend(pdf_rest[:remaining])
+        remaining = k - len(selected)
+
+    if remaining > 0 and other:
+        already = {r.chunk_id for r in selected}
+        other_rest = [r for r in other if r.chunk_id not in already]
+        selected.extend(other_rest[:remaining])
+
+    return dedupe_results(selected)[:k]
 
 
 def hybrid_search(
@@ -398,21 +664,14 @@ def hybrid_search(
 
     combined.sort(key=lambda x: x[1], reverse=True)
     top = combined[:k]
+    chunk_by_id = {c.chunk_id: c for c in chunks}
 
     out: List[RetrievalResult] = []
     for idx, score in top:
-        c = chunks[idx]
-        out.append(
-            RetrievalResult(
-                chunk_id=c.chunk_id,
-                score=float(score),
-                page_start=c.page_start,
-                page_end=c.page_end,
-                section_title=c.section_title,
-                source=c.source,
-                text=c.text,
-            )
-        )
+        c = chunk_by_id.get(idx)
+        if c is None:
+            continue
+        out.append(chunk_to_result(c, score))
     return out
 
 
@@ -424,37 +683,88 @@ def select_retrieval(
     mode: str,
     index_path: Path,
     hybrid_alpha: float,
+    source_priority: str,
+    symbols_ratio: float,
+    max_pdf_extras: int,
 ) -> Tuple[str, List[RetrievalResult]]:
     if not (0.0 <= hybrid_alpha <= 1.0):
         raise RuntimeError(f"--hybrid-alpha must be between 0 and 1, got {hybrid_alpha}")
+    candidate_k = max(k * 5, 25)
+    if mode == "auto":
+        if has_dense(index_payload):
+            mode = "hybrid"
+        else:
+            mode = "lexical"
+    mode_used = mode
     if mode == "lexical":
-        return "lexical", lexical_search(index_payload, chunks, query, k)
-    if mode == "dense":
-        return "dense", dense_search(index_payload, chunks, query, k, index_path)
-    if mode == "hybrid" or mode == "auto":
-        return "hybrid", hybrid_search(
+        candidates = lexical_search(index_payload, chunks, query, candidate_k)
+    elif mode == "dense":
+        candidates = dense_search(index_payload, chunks, query, candidate_k, index_path)
+    elif mode == "hybrid":
+        candidates = hybrid_search(
             index_payload=index_payload,
             chunks=chunks,
             query=query,
-            k=k,
+            k=candidate_k,
             index_path=index_path,
             alpha=hybrid_alpha,
         )
-    raise RuntimeError(f"Unsupported retrieval mode: {mode}")
+    else:
+        raise RuntimeError(f"Unsupported retrieval mode: {mode}")
+
+    results = apply_source_priority(
+        results=candidates,
+        k=k,
+        source_priority=source_priority,
+        symbols_ratio=symbols_ratio,
+        max_pdf_extras=max_pdf_extras,
+        index_has_generated=has_source(chunks, "generated"),
+        index_has_pdf=has_source(chunks, "pdf"),
+    )
+    return mode_used, results
 
 
-def build_context_block(results: List[RetrievalResult], max_chars_per_chunk: int = 2200) -> str:
+def build_context_block(
+    results: List[RetrievalResult],
+    max_chars_per_pdf_chunk: int = 2200,
+    max_chars_per_generated_chunk: int = 0,
+) -> str:
     blocks = []
     for r in results:
-        snippet = r.text[:max_chars_per_chunk]
-        section = r.section_title or "(section unknown)"
+        if r.source_type == "generated":
+            if max_chars_per_generated_chunk > 0:
+                snippet = r.text[:max_chars_per_generated_chunk]
+            else:
+                snippet = r.text
+        else:
+            snippet = r.text[:max_chars_per_pdf_chunk]
+        meta_lines = [
+            f"[CHUNK {r.chunk_id}]",
+            f"Source: {r.source} ({r.source_type})",
+        ]
+        if r.source_type == "pdf":
+            section = r.section_title or "(section unknown)"
+            if r.page_start is not None and r.page_end is not None:
+                meta_lines.append(f"Pages: {r.page_start}-{r.page_end}")
+            elif r.page_start is not None:
+                meta_lines.append(f"Page: {r.page_start}")
+            meta_lines.append(f"Section: {section}")
+        else:
+            symbol = r.qualname or r.symbol_id
+            if symbol:
+                meta_lines.append(f"Symbol: {symbol}")
+            if r.signature:
+                meta_lines.append(f"Signature: {r.signature}")
+            if r.module:
+                meta_lines.append(f"Module: {r.module}")
+            if r.kind:
+                meta_lines.append(f"Kind: {r.kind}")
+            meta_lines.append(f"Location: {location_label(r)}")
+
         blocks.append(
             "\n".join(
-                [
-                    f"[CHUNK {r.chunk_id}]",
-                    f"Source: {r.source}",
-                    f"Pages: {r.page_start}-{r.page_end}",
-                    f"Section: {section}",
+                meta_lines
+                + [
                     "Text:",
                     snippet,
                 ]
@@ -477,8 +787,9 @@ Context:
 
 Output format:
 1) One fenced code block with complete SageMath code.
-2) A short note (3-6 lines) listing citations in the format:
+2) A short note (3-6 lines) listing citations from the context, for example:
    - pp. <start>-<end>, section: <title or unknown>
+   - symbol: <name>, source: <file_path:line>
 """
 
 
@@ -508,8 +819,7 @@ Context:
 
 Output format:
 1) One fenced code block with corrected complete SageMath code.
-2) A short citation list in this format:
-   - pp. <start>-<end>, section: <title or unknown>
+2) A short citation list based on the provided context.
 """
 
 
@@ -581,12 +891,30 @@ def format_citations(results: List[RetrievalResult]) -> str:
     seen = set()
     lines = []
     for r in results:
-        key = (r.page_start, r.page_end, r.section_title)
+        if r.source_type == "pdf":
+            key = ("pdf", r.source, r.page_start, r.page_end, r.section_title)
+            if key in seen:
+                continue
+            seen.add(key)
+            section = r.section_title or "unknown"
+            if r.page_start is not None and r.page_end is not None:
+                lines.append(f"- pp. {r.page_start}-{r.page_end}, section: {section}")
+            elif r.page_start is not None:
+                lines.append(f"- p. {r.page_start}, section: {section}")
+            else:
+                lines.append(f"- source: {r.source}, section: {section}")
+            continue
+
+        symbol = r.qualname or r.symbol_id or "unknown_symbol"
+        loc = location_label(r)
+        key = ("generated", symbol, loc)
         if key in seen:
             continue
         seen.add(key)
-        section = r.section_title or "unknown"
-        lines.append(f"- pp. {r.page_start}-{r.page_end}, section: {section}")
+        if r.signature:
+            lines.append(f"- symbol: {symbol}, signature: {r.signature}, source: {loc}")
+        else:
+            lines.append(f"- symbol: {symbol}, source: {loc}")
     return "\n".join(lines)
 
 
@@ -605,78 +933,157 @@ def parse_chunks(index_payload: Dict[str, object]) -> List[Chunk]:
     raw = index_payload.get("chunks")
     if not isinstance(raw, list):
         raise RuntimeError("Index is missing `chunks`.")
-    return [Chunk(**item) for item in raw]
+    chunks: List[Chunk] = []
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        page_start = _safe_int(item.get("page_start"))
+        page_end = _safe_int(item.get("page_end"))
+        source_type = _safe_str(item.get("source_type"))
+        if not source_type:
+            source_type = "pdf" if (page_start is not None or page_end is not None) else "generated"
+        chunks.append(
+            Chunk(
+                chunk_id=_safe_int(item.get("chunk_id")) or idx,
+                text=_safe_str(item.get("text")),
+                source=_safe_str(item.get("source")) or "unknown",
+                source_type=source_type,
+                page_start=page_start,
+                page_end=page_end,
+                section_title=_safe_str(item.get("section_title")),
+                symbol_id=_safe_str(item.get("symbol_id")),
+                module=_safe_str(item.get("module")),
+                qualname=_safe_str(item.get("qualname")),
+                signature=_safe_str(item.get("signature")),
+                kind=_safe_str(item.get("kind")),
+                file_path=_safe_str(item.get("file_path")),
+                line=_safe_int(item.get("line")),
+                summary=_safe_str(item.get("summary")),
+                example_count=_safe_int(item.get("example_count")) or 0,
+            )
+        )
+    return chunks
 
 
 def cmd_build_index(args: argparse.Namespace) -> int:
-    pdf_path = Path(args.pdf).resolve()
     index_path = Path(args.index_path).resolve()
+    source_mode = args.source_mode
+    chunks: List[Chunk] = []
+    pages_count = 0
+    source_meta: Dict[str, str] = {"mode": source_mode}
 
-    if not pdf_path.exists():
-        print(f"ERROR: PDF not found: {pdf_path}", file=sys.stderr)
+    # Symbols-first organization: keep generated API docs as the primary layer.
+    if source_mode in {"generated", "both"}:
+        symbols_path = Path(args.generated_symbols).resolve()
+        try:
+            generated_chunks = extract_generated_symbol_chunks(symbols_path)
+        except FileNotFoundError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        chunks.extend(generated_chunks)
+        source_meta["generated_symbols"] = str(symbols_path)
+
+        if args.include_generated_api_md:
+            api_path = Path(args.generated_api_md).resolve()
+            md_chunks = extract_api_reference_chunks(
+                api_reference_path=api_path,
+                chunk_chars=args.generated_chunk_chars,
+            )
+            chunks.extend(md_chunks)
+            source_meta["generated_api_md"] = str(api_path)
+
+    if source_mode in {"pdf", "both"}:
+        pdf_path = Path(args.pdf).resolve()
+        if not pdf_path.exists():
+            print(f"ERROR: PDF not found: {pdf_path}", file=sys.stderr)
+            return 2
+        pages = extract_pages(pdf_path)
+        pages_count = len(pages)
+        pdf_chunks = chunk_pages(
+            pages=pages,
+            source=pdf_path.name,
+            chunk_chars=args.chunk_chars,
+            overlap_chars=args.overlap_chars,
+        )
+        chunks.extend(pdf_chunks)
+        source_meta["pdf_path"] = str(pdf_path)
+
+    if not chunks:
+        print("ERROR: No chunks were produced for indexing.", file=sys.stderr)
         return 2
 
-    pages = extract_pages(pdf_path)
-    chunks = chunk_pages(
-        pages=pages,
-        source=pdf_path.name,
-        chunk_chars=args.chunk_chars,
-        overlap_chars=args.overlap_chars,
-    )
+    # Keep ids contiguous to make retrieval bookkeeping stable.
+    for idx, c in enumerate(chunks):
+        c.chunk_id = idx
 
     payload: Dict[str, object] = {
-        "version": 1,
+        "version": 2,
         "created_at": utc_now_iso(),
-        "pdf_path": str(pdf_path),
+        "sources": source_meta,
+        "retrieval_defaults": {
+            "source_priority": "symbols-first",
+            "symbols_ratio": 0.75,
+            "max_pdf_extras": 2,
+        },
         "chunking": {
             "chunk_chars": args.chunk_chars,
             "overlap_chars": args.overlap_chars,
+            "generated_chunk_chars": args.generated_chunk_chars,
         },
         "chunks": [asdict(c) for c in chunks],
         "lexical": build_lexical_payload(chunks),
     }
 
-    try:
-        import faiss  # type: ignore
-        import numpy as np  # type: ignore
-        from sentence_transformers import SentenceTransformer  # type: ignore
-    except Exception as exc:
-        raise RuntimeError(
-            "Embedding vector-store build requires sentence-transformers, numpy, and faiss-cpu. "
-            "Install with: pip install sentence-transformers numpy faiss-cpu"
-        ) from exc
+    if not args.no_dense:
+        try:
+            import faiss  # type: ignore
+            import numpy as np  # type: ignore
+            from sentence_transformers import SentenceTransformer  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "Embedding vector-store build requires sentence-transformers, numpy, and faiss-cpu. "
+                "Install with: pip install sentence-transformers numpy faiss-cpu "
+                "(or rebuild with --no-dense for lexical-only indexing)."
+            ) from exc
 
-    model = SentenceTransformer(args.dense_model)
-    texts = [c.text for c in chunks]
-    emb = model.encode(texts, normalize_embeddings=True)
-    emb = np.asarray(emb, dtype="float32")
+        model = SentenceTransformer(args.dense_model)
+        texts = [c.text for c in chunks]
+        emb = model.encode(texts, normalize_embeddings=True)
+        emb = np.asarray(emb, dtype="float32")
 
-    emb_name = index_path.with_suffix(index_path.suffix + ".dense.npy").name
-    emb_path = index_path.parent / emb_name
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(str(emb_path), emb)
+        emb_name = index_path.with_suffix(index_path.suffix + ".dense.npy").name
+        emb_path = index_path.parent / emb_name
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(str(emb_path), emb)
 
-    dim = emb.shape[1]
-    vs_index = faiss.IndexFlatIP(dim)
-    vs_index.add(emb)
-    faiss_name = index_path.with_suffix(index_path.suffix + ".faiss").name
-    faiss_path = index_path.parent / faiss_name
-    faiss.write_index(vs_index, str(faiss_path))
+        dim = emb.shape[1]
+        vs_index = faiss.IndexFlatIP(dim)
+        vs_index.add(emb)
+        faiss_name = index_path.with_suffix(index_path.suffix + ".faiss").name
+        faiss_path = index_path.parent / faiss_name
+        faiss.write_index(vs_index, str(faiss_path))
 
-    payload["dense"] = {
-        "model": args.dense_model,
-        "metric": "inner_product",
-        "embeddings_file": emb_name,
-        "faiss_index_file": faiss_name,
-    }
+        payload["dense"] = {
+            "model": args.dense_model,
+            "metric": "inner_product",
+            "embeddings_file": emb_name,
+            "faiss_index_file": faiss_name,
+        }
 
     save_index(index_path, payload)
 
     print(f"Index written: {index_path}")
-    print(f"Pages: {len(pages)}")
-    print(f"Chunks: {len(chunks)}")
-    print(f"Dense model: {payload['dense']['model']}")  # type: ignore[index]
-    print(f"Vector store: {payload['dense']['faiss_index_file']}")  # type: ignore[index]
+    if pages_count:
+        print(f"Pages: {pages_count}")
+    pdf_chunks_count = sum(1 for c in chunks if c.source_type == "pdf")
+    generated_chunks_count = len(chunks) - pdf_chunks_count
+    print(f"Chunks: {len(chunks)} (pdf={pdf_chunks_count}, generated={generated_chunks_count})")
+    print(f"Source mode: {source_mode}")
+    if "dense" in payload:
+        print(f"Dense model: {payload['dense']['model']}")  # type: ignore[index]
+        print(f"Vector store: {payload['dense']['faiss_index_file']}")  # type: ignore[index]
+    else:
+        print("Dense index: disabled (--no-dense); retrieval mode must be lexical.")
     return 0
 
 
@@ -693,17 +1100,33 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         mode=args.mode,
         index_path=index_path,
         hybrid_alpha=args.hybrid_alpha,
+        source_priority=args.source_priority,
+        symbols_ratio=args.symbols_ratio,
+        max_pdf_extras=args.max_pdf_extras,
     )
 
     print(f"Retrieval mode: {mode_used}")
     print(f"Question: {args.question}\n")
     for r in results:
-        section = r.section_title or "unknown"
-        preview = r.text[:300].replace("\n", " ")
-        print(
-            f"- chunk={r.chunk_id} score={r.score:.4f} pages={r.page_start}-{r.page_end} "
-            f"section={section}\n  preview: {preview}\n"
-        )
+        if r.source_type == "pdf":
+            preview = r.text[:300].replace("\n", " ")
+            section = r.section_title or "unknown"
+            pages = (
+                f"{r.page_start}-{r.page_end}"
+                if r.page_start is not None and r.page_end is not None
+                else str(r.page_start or "?")
+            )
+            print(
+                f"- chunk={r.chunk_id} score={r.score:.4f} source=pdf pages={pages} "
+                f"section={section}\n  preview: {preview}\n"
+            )
+        else:
+            preview = r.text.replace("\n", " ")
+            symbol = r.qualname or r.symbol_id or "unknown_symbol"
+            print(
+                f"- chunk={r.chunk_id} score={r.score:.4f} source=generated symbol={symbol} "
+                f"location={location_label(r)}\n  preview: {preview}\n"
+            )
     return 0
 
 
@@ -720,6 +1143,9 @@ def cmd_answer(args: argparse.Namespace) -> int:
         mode=args.mode,
         index_path=index_path,
         hybrid_alpha=args.hybrid_alpha,
+        source_priority=args.source_priority,
+        symbols_ratio=args.symbols_ratio,
+        max_pdf_extras=args.max_pdf_extras,
     )
 
     prompt = build_generation_prompt(args.question, results)
@@ -759,6 +1185,9 @@ def cmd_answer(args: argparse.Namespace) -> int:
                 mode=args.mode,
                 index_path=index_path,
                 hybrid_alpha=args.hybrid_alpha,
+                source_priority=args.source_priority,
+                symbols_ratio=args.symbols_ratio,
+                max_pdf_extras=args.max_pdf_extras,
             )
             repair_prompt = build_repair_prompt(
                 question=args.question,
@@ -798,52 +1227,42 @@ def cmd_answer(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="RAG assistant for ore_algebra PDF -> SageMath code")
+    p = argparse.ArgumentParser(description="Vector-store organizer for ore_algebra docs")
     sub = p.add_subparsers(dest="cmd")
 
-    b = sub.add_parser("build-index", help="Extract and index PDF chunks")
+    b = sub.add_parser("build-index", help="Extract and index docs from PDF/generated sources")
+    b.add_argument("--source-mode", choices=["pdf", "generated", "both"], default="pdf")
     b.add_argument("--pdf", default="data/ore_algebra_guide.pdf", help="Path to ore_algebra guide PDF")
+    b.add_argument(
+        "--generated-symbols",
+        default="generated/symbols.jsonl",
+        help="Path to generated symbol JSONL",
+    )
+    b.add_argument(
+        "--generated-api-md",
+        default="generated/API_REFERENCE.md",
+        help="Path to generated API markdown",
+    )
+    b.add_argument(
+        "--include-generated-api-md",
+        action="store_true",
+        help="Include API_REFERENCE markdown sections in the index",
+    )
     b.add_argument("--index-path", default=".rag/ore_algebra_index.json", help="Where to write index JSON")
     b.add_argument("--chunk-chars", type=int, default=3500)
     b.add_argument("--overlap-chars", type=int, default=400)
+    b.add_argument("--generated-chunk-chars", type=int, default=2400)
     b.add_argument(
         "--dense-model",
         default="all-MiniLM-L6-v2",
         help="Sentence-transformers model for embedding vector-store build",
     )
+    b.add_argument(
+        "--no-dense",
+        action="store_true",
+        help="Skip embedding/FAISS build and keep a lexical-only index",
+    )
     b.set_defaults(func=cmd_build_index)
-
-    r = sub.add_parser("retrieve", help="Retrieve relevant chunks for a question")
-    r.add_argument("--index-path", default=".rag/ore_algebra_index.json")
-    r.add_argument("--question", required=True)
-    r.add_argument("--k", type=int, default=6)
-    r.add_argument("--mode", choices=["auto", "hybrid", "dense", "lexical"], default="hybrid")
-    r.add_argument(
-        "--hybrid-alpha",
-        type=float,
-        default=0.7,
-        help="Hybrid weight for dense score in [0,1]. Final score = a*dense + (1-a)*lexical",
-    )
-    r.set_defaults(func=cmd_retrieve)
-
-    a = sub.add_parser("answer", help="Generate Sage code from retrieved PDF context")
-    a.add_argument("--index-path", default=".rag/ore_algebra_index.json")
-    a.add_argument("--question", required=True)
-    a.add_argument("--k", type=int, default=6)
-    a.add_argument("--mode", choices=["auto", "hybrid", "dense", "lexical"], default="hybrid")
-    a.add_argument(
-        "--hybrid-alpha",
-        type=float,
-        default=0.7,
-        help="Hybrid weight for dense score in [0,1]. Final score = a*dense + (1-a)*lexical",
-    )
-    a.add_argument("--provider", default="openai", choices=["openai"])
-    a.add_argument("--model", default="gpt-4.1-mini")
-    a.add_argument("--verify", action="store_true", help="Run generated code with sage -python and auto-repair")
-    a.add_argument("--max-repairs", type=int, default=2)
-    a.add_argument("--sage-bin", default="sage")
-    a.add_argument("--output-script", default="")
-    a.set_defaults(func=cmd_answer)
 
     return p
 
@@ -856,9 +1275,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(
             "\nExamples:\n"
             "  bash scripts/download_ore_guide.sh\n"
-            "  python3 ore_rag_assistant.py build-index --pdf data/ore_algebra_guide.pdf\n"
-            "  python3 ore_rag_assistant.py retrieve --question \"shift Ore algebra over QQ[n]\"\n"
-            "  python3 ore_rag_assistant.py answer --question \"Define Sn over QQ[n]\" --verify\n",
+            "  python3 ore_rag_assistant.py build-index --source-mode pdf --pdf data/ore_algebra_guide.pdf\n"
+            "  python3 ore_rag_assistant.py build-index --source-mode generated --generated-symbols generated/symbols.jsonl\n"
+            "  python3 ore_rag_assistant.py build-index --source-mode both --include-generated-api-md\n"
+            "  streamlit run streamlit_app.py\n",
             file=sys.stderr,
         )
         return 2
