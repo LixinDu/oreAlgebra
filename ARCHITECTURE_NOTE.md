@@ -1,7 +1,7 @@
 # Architecture Note
 
 ## Purpose
-This project organizes vector stores for `ore_algebra` documentation and provides a separate retrieval UI. The index builder ingests package docs from `generated/` and optional PDF material, builds hybrid retrieval artifacts (dense + lexical), and stores source-aware metadata for retrieval-time fusion.
+This project organizes vector stores for `ore_algebra` documentation and provides Streamlit apps for retrieval and LLM-assisted answering. The index builder ingests package docs from `generated/` and optional PDF material, builds hybrid retrieval artifacts (dense + lexical), and stores source-aware metadata for retrieval-time fusion.
 
 ## High-Level Architecture
 1. Ingestion
@@ -32,13 +32,19 @@ This project organizes vector stores for `ore_algebra` documentation and provide
 
 5. Runtime Apps
 - `ore_rag_assistant.py` CLI is restricted to vector-store organization (`build-index`).
-- `streamlit_app.py` is a separate retrieval-only UI that runs retrieval in background and displays context/citations.
+- `streamlit_app.py` is a retrieval-only UI that runs retrieval in background and displays context/citations.
+- `streamlit_chat_app.py` performs retrieval, sends question + top-k context to an LLM, and displays answer/code/citations.
+- `llm_service.py` is the provider adapter for prompt building, provider calls, and structured response parsing.
+- LLM providers supported: `openai` and `gemini`.
+- API keys can be provided in UI or loaded automatically from `.env` (`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`).
 
 ## Repository Structure
 ```text
 oreAlgebra/
   ore_rag_assistant.py          # Index builder CLI + shared retrieval functions
   streamlit_app.py              # Retrieval-only Streamlit application
+  streamlit_chat_app.py         # Retrieval + LLM answer Streamlit application
+  llm_service.py                # LLM prompt/provider/parse service
   README.md                     # User-facing quickstart
   ARCHITECTURE_NOTE.md          # Architecture + maintenance notes
   WORK_LOG.md                   # Development/change log
@@ -59,8 +65,11 @@ oreAlgebra/
 - generated package docs in `generated/symbols.jsonl` (required for generated mode).
 - optional PDF in `data/ore_algebra_guide.pdf`.
 3. Build index with `ore_rag_assistant.py build-index` (`generated`, `pdf`, or `both`).
-4. Start `streamlit_app.py`.
-5. Run retrieval queries in the app and inspect source-aware citations.
+4. Start one app:
+- `streamlit_app.py` for retrieval-only inspection.
+- `streamlit_chat_app.py` for retrieval + LLM answer generation.
+5. For chat app, choose provider/model and submit question.
+6. App retrieves top-k context (symbols-first policy), calls selected LLM, and maps returned context IDs to citations.
 
 ## Run Commands
 ```bash
@@ -92,7 +101,10 @@ python3 ore_rag_assistant.py build-index \
 # 5) retrieval UI
 streamlit run streamlit_app.py
 
-# 6) optional lexical-only index (if dense model download is blocked)
+# 6) chat UI (retrieval + LLM answer)
+streamlit run streamlit_chat_app.py
+
+# 7) optional lexical-only index (if dense model download is blocked)
 python3 ore_rag_assistant.py build-index \
   --source-mode both \
   --generated-symbols generated/symbols.jsonl \
@@ -108,6 +120,8 @@ python3 ore_rag_assistant.py build-index \
 - Citation quality limits: section detection is heuristic and may miss or mislabel section titles.
 - Retrieval misses: source-priority and `--hybrid-alpha` may need tuning by query type.
 - Context volume: full symbol text can be large; UI and downstream consumers should manage token/length budgets.
+- Provider output variance: different LLM providers/models may format JSON or code differently.
+- Key management risk: missing/incorrect `.env` keys cause runtime LLM call failures.
 
 ## Regular Updates
 - Last updated: 2026-02-15
@@ -126,6 +140,7 @@ python3 ore_rag_assistant.py build-index \
 
 ## Update Entries (Append Only)
 <!-- UPDATE_ENTRIES_START -->
+- 2026-02-15: Added LLM chat architecture (`streamlit_chat_app.py` + `llm_service.py`), provider selection (OpenAI/Gemini), and `.env` key fallback behavior.
 - 2026-02-15: Reworked architecture to index-builder + retrieval-only Streamlit app; added generated-doc source model and symbols-first retrieval policy notes.
 - 2026-02-14: Added maintainer edit policy and append-only update log markers.
 <!-- UPDATE_ENTRIES_END -->

@@ -97,11 +97,13 @@ python3 ore_rag_assistant.py answer --index-path .rag/ore_algebra_index.json --q
 ## Dependency Notes (Current)
 - Requirements now focus on indexing + retrieval:
   - `pypdf`
+  - `openai`
+  - `google-generativeai`
+  - `python-dotenv`
   - `sentence-transformers`
   - `numpy`
   - `faiss-cpu`
   - `streamlit`
-- `openai` removed from `requirements.txt` for the current retrieval-only app path.
 
 ## Current Recommended Run (Latest)
 ```bash
@@ -119,4 +121,42 @@ python3 ore_rag_assistant.py build-index \
 
 # Start retrieval UI
 streamlit run streamlit_app.py
+```
+
+## Update (LLM Chat App + Multi-Provider)
+- Added LLM service layer: `llm_service.py`
+  - Structured request/response schema for question + retrieved context.
+  - Prompt template enforces context-grounded answering and citation IDs.
+  - Added ore_algebra generator naming/commutation rule block in prompt.
+- Added chat UI: `streamlit_chat_app.py`
+  - Retrieves top-k context from built index.
+  - Sends context + question to selected provider/model.
+  - Renders answer, optional code, citations, and missing-info notes.
+- Added provider choice:
+  - `openai`
+  - `gemini`
+- Added key fallback behavior:
+  - UI key is optional.
+  - If blank, app uses environment/.env keys.
+  - Supported key names:
+    - OpenAI: `OPENAI_API_KEY`
+    - Gemini: `GEMINI_API_KEY` (fallback: `GOOGLE_API_KEY`)
+- Added `.env` template for local key management.
+
+## Current Recommended Run (Chat)
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Build combined index (generated docs + PDF support)
+python3 ore_rag_assistant.py build-index \
+  --source-mode both \
+  --generated-symbols generated/symbols.jsonl \
+  --pdf data/ore_algebra_guide.pdf \
+  --include-generated-api-md \
+  --generated-api-md generated/API_REFERENCE.md \
+  --index-path .rag/ore_algebra_both_index.json
+
+# Start LLM chat UI
+streamlit run streamlit_chat_app.py
 ```
