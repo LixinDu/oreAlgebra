@@ -1,0 +1,104 @@
+{
+  "global": [
+    "Prefer explicit imports from ore_algebra modules for every non-builtin API you call.",
+    "When you reference a retrieved symbol, verify it is available from an import in the generated code."
+  ],
+  "rules": [
+    {
+      "id": "ore_generator_binding",
+      "scope": "all",
+      "when_any": [
+        "OreAlgebra(",
+        "Dx",
+        "Sn",
+        "shift",
+        "differential",
+        "q-shift"
+      ],
+      "message": "After `A = OreAlgebra(...)`, bind generator names before building operators: use `Sn = A.gen()` (or `Dx = A.gen()`, etc.) or Sage shorthand `A.<Sn> = OreAlgebra(...)`; otherwise names like `Sn`/`Dx` are undefined."
+    },
+    {
+      "id": "analytic_imports",
+      "scope": "context",
+      "when_any": [
+        "analytic.",
+        "series_sum",
+        "StoppingCriterion"
+      ],
+      "message": "For analytic APIs, import from their specific submodule, for example `from ore_algebra.analytic.naive_sum import series_sum`."
+    },
+    {
+      "id": "differential_ops_import",
+      "scope": "all",
+      "when_any": [
+        "DifferentialOperators",
+        "Dx"
+      ],
+      "message": "If using DifferentialOperators(), include a matching ore_algebra import before calling it."
+    },
+    {
+      "id": "guessing_imports",
+      "scope": "all",
+      "when_any": [
+        "guess_rec",
+        "guess_deq",
+        "guess_raw",
+        "guess a recurrence",
+        "guess differential equation"
+      ],
+      "message": "Guessing helpers live in `ore_algebra.guessing`; import them explicitly, for example `from ore_algebra.guessing import guess_rec`, instead of assuming they come from the package root or an algebra instance."
+    },
+    {
+      "id": "generator_base_variable_match",
+      "scope": "all",
+      "when_any": [
+        "OreAlgebra(",
+        "recurrence",
+        "shift",
+        "Sn",
+        "Sx",
+        "Tx",
+        "Dn",
+        "Dx",
+        "R.<x>",
+        "R.<n>"
+      ],
+      "message": "Whenever you use two-character generators like `S*`, `T*`, or `D*`, the `*` parameter must be a defined base variable in the polynomial ring. Example: use `Sx`/`Tx`/`Dx` with variable `x`, and `Sn`/`Tn`/`Dn` with variable `n`. Avoid mismatches like `R.<x> = ZZ['x']` with `A.<Sn> = OreAlgebra(R, 'Sn')`."
+    },
+    {
+      "id": "generator_attribute_access",
+      "scope": "all",
+      "when_any": [
+        "object has no attribute 'Dx'",
+        "object has no attribute 'Sn'",
+        "object has no attribute 'Sx'",
+        "a.dx",
+        "a.sn",
+        "a.sx"
+      ],
+      "message": "Do not access ore_algebra generators as algebra attributes like `A.Dx` or `A.Sn`. After `A = OreAlgebra(...)`, bind the generator with `Dx = A.gen()` / `Sn = A.gen()`, or use Sage shorthand `A.<Dx> = OreAlgebra(...)`."
+    },
+    {
+      "id": "unbound_generator_use",
+      "scope": "all",
+      "when_any": [
+        "name 'dx' is not defined",
+        "name 'sn' is not defined",
+        "name 'sx' is not defined",
+        "unbound generator issue"
+      ],
+      "message": "If you use a generator symbol like `Dx`, `Sn`, or `Sx`, bind it explicitly first with `A.<Dx> = OreAlgebra(...)`, `Dx = A.gen()`, or a helper like `Dops, x, Dx = DifferentialOperators()`."
+    },
+    {
+      "id": "ring_name_case_mismatch",
+      "scope": "all",
+      "when_any": [
+        "orealgebra(r,",
+        "orealgebra(r, 'dx')",
+        "orealgebra(r, 'sn')",
+        "module not found: no module named 'rpy2'"
+      ],
+      "message": "Watch for case-sensitive ring-name typos like `R` vs `r` in `OreAlgebra(...)`. Using lowercase `r` by mistake can trigger unrelated Sage interface errors instead of a clear ring error."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "active_profile": "ore_algebra_master_local",
+  "profiles": [
+    {
+      "id": "ore_algebra_master_local",
+      "label": "ore_algebra-master local checkout",
+      "description": "Default local knowledge base sourced from the sibling ore_algebra-master repository.",
+      "upstream_root": "../ore_algebra-master",
+      "upstream_input_root": "../ore_algebra-master/src/ore_algebra",
+      "upstream_generator_script": "../ore_algebra-master/rag_doc_builder/generate_formatted_doc.py",
+      "upstream_generated_dir": "../ore_algebra-master/rag_doc_builder/generated",
+      "local_generated_symbols": "generated/symbols.jsonl",
+      "local_generated_api_md": "generated/API_REFERENCE.md",
+      "local_narratives": "generated/module_narratives.jsonl",
+      "local_pdf_paths": [
+        "data/ore_algebra_guide.pdf",
+        "data/ore_algebra_guide_multivariate.pdf"
+      ],
+      "local_index_paths": {
+        "generated": ".rag/ore_algebra_generated_index.json",
+        "pdf": ".rag/ore_algebra_pdf_index.json",
+        "both": ".rag/ore_algebra_both_index.json"
+      },
+      "local_graph_path": ".rag/ore_algebra_graph.json",
+      "local_precondition_graph_path": ".rag/ore_algebra_precondition_graph.json",
+      "local_reports_dir": "generated",
+      "default_source_mode": "both",
+      "include_generated_api_md_by_default": true
+    }
+  ]
+}

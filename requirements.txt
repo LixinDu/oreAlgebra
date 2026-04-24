@@ -1,0 +1,9 @@
+pypdf>=4.2.0
+openai>=1.40.0
+google-generativeai>=0.8.0
+python-dotenv>=1.0.1
+sentence-transformers>=3.0.0
+torchvision>=0.26.0
+numpy>=1.26.0
+faiss-cpu>=1.8.0
+streamlit>=1.37.0

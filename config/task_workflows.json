@@ -1,0 +1,253 @@
+{
+  "families": [
+    {
+      "id": "A",
+      "name": "Algebra Setup & Representation",
+      "summary": "Choose or construct the right Ore algebra and generators.",
+      "keywords": ["orealgebra", "ore algebra", "differentialoperators", "generator", "base ring", "representation", "construct algebra", "choose algebra", "derivation", "multivariate ore algebra", "several variables", "several generators", "mixed generators"]
+    },
+    {
+      "id": "B",
+      "name": "Operator Algebra",
+      "summary": "Compute operator relations such as gcrd, lclm, factors, local structure, and ideal bases.",
+      "keywords": ["gcrd", "lclm", "factor", "right factor", "left factor", "recurrence operator", "operator algebra", "indicial polynomial", "local basis", "left ideal", "annihilating ideal", "groebner basis", "groebner", "buchberger", "fglm", "eliminate", "elimination"]
+    },
+    {
+      "id": "C",
+      "name": "Closure & Transformation",
+      "summary": "Derive annihilators for transformed, combined, or converted operators.",
+      "keywords": ["closure", "transformation", "closure transformation", "annihilator", "integral", "composition", "symmetric product", "symmetric power", "symmetric square", "associate", "to_s", "to_d", "to_f", "to_t", "convert operator"]
+    },
+    {
+      "id": "D",
+      "name": "D-Finite Objects & Sequences",
+      "summary": "Work with D-finite functions or sequences at a user-facing level.",
+      "keywords": ["d-finite", "dfinite", "approx", "sequence terms", "first terms", "to_list", "forward_matrix_bsplit", "initial values", "initial value"]
+    },
+    {
+      "id": "E",
+      "name": "Analytic/Numerical Computation",
+      "summary": "Numerically evaluate solutions or continue them along paths.",
+      "keywords": ["numerical", "analytic continuation", "transition matrix", "path", "series_sum", "numerical_solution", "evaluate at", "evaluate the solution", "solution of", "initial condition", "initial conditions", "f(0)", "local solutions"]
+    },
+    {
+      "id": "F",
+      "name": "Guessing",
+      "summary": "Guess recurrences or differential equations from sampled data.",
+      "keywords": ["guess", "guess_rec", "guess_deq", "guess_raw", "sampled data", "coefficients", "annihilates", "annihilator", "annihilating", "find a recurrence", "find recurrence", "sequence defined by"]
+    },
+    {
+      "id": "G",
+      "name": "Advanced",
+      "summary": "Later-phase symbolic workflows such as telescoping, desingularization, or multivariate elimination.",
+      "keywords": ["telescoping", "creative telescoping", "desingularization", "desingularize", "nullspace", "sage_native", "advanced", "apparent singularities", "remove apparent singularities", "telescoper", "certificate", "certificates", "multiple sum", "multiple integral"]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "A1_create_or_choose_algebra",
+      "family_id": "A",
+      "title": "Create Or Choose An Ore Algebra",
+      "summary": "Build the right Ore algebra and generator naming before doing operator work.",
+      "keywords": ["create algebra", "construct algebra", "orealgebra", "ore algebra", "differentialoperators", "generator", "base ring", "which algebra", "derivation in t", "derivation"],
+      "preferred_symbols": ["OreAlgebra", "DifferentialOperators"],
+      "prompt_rules": [
+        "Match the generator prefix to the intended operator type before doing downstream work.",
+        "Keep base-ring variables and generator names consistent."
+      ],
+      "tuning_params": []
+    },
+    {
+      "id": "A2_create_or_choose_multivariate_algebra",
+      "family_id": "A",
+      "title": "Create Or Choose A Multivariate Ore Algebra",
+      "summary": "Build a multivariate Ore algebra with several generators before ideal or telescoping work.",
+      "keywords": ["multivariate ore algebra", "multivariate", "several variables", "several generators", "several-generator", "mixed generators", "dx dy", "dx and dy", "x and y", "du dv", "sn sk", "multivariate differential operator", "ideal computations", "ideal work"],
+      "preferred_symbols": ["OreAlgebra", "OreAlgebra_generic.gens", "OreAlgebra_generic.ideal"],
+      "prompt_rules": [
+        "Declare every base-ring variable and Ore generator explicitly in the intended order.",
+        "For multivariate tasks, keep the algebra object visible before constructing operators or ideals."
+      ],
+      "tuning_params": []
+    },
+    {
+      "id": "B1_gcrd_lclm",
+      "family_id": "B",
+      "title": "Compute GCRD Or LCLM",
+      "summary": "Find common right or left multiples/divisors of operators.",
+      "keywords": ["gcrd", "lclm", "common divisor", "common multiple", "left common multiple", "greatest common right divisor"],
+      "preferred_symbols": ["gcrd", "lclm"],
+      "prompt_rules": [
+        "Use exact symbolic operator methods and print the resulting operator.",
+        "Keep the task focused on divisor or common-multiple computation."
+      ],
+      "tuning_params": []
+    },
+    {
+      "id": "B2_factor_right_factor",
+      "family_id": "B",
+      "title": "Find Right Factors Of A Recurrence Operator",
+      "summary": "Find a right factor of a shift or q-shift recurrence operator.",
+      "keywords": ["right factor", "right_factors", "factor recurrence", "q-shift recurrence", "factor this operator", "decomposed on the right", "nontrivial right factor", "shift recurrence"],
+      "preferred_symbols": ["right_factors", "lclm", "gcrd"],
+      "prompt_rules": [
+        "The cited right_factors implementation is for shift and q-shift recurrences and only searches first-order right factors.",
+        "When claiming a right factor F, structure code so the result can be checked as L = Q*F."
+      ],
+      "tuning_params": ["order", "early_termination", "infolevel"]
+    },
+    {
+      "id": "B3_local_singularity_analysis",
+      "family_id": "B",
+      "title": "Analyze Local Behavior Near Singularities",
+      "summary": "Compute indicial data and local basis expansions near a singularity.",
+      "keywords": ["indicial polynomial", "local basis", "local basis expansions", "singularity", "singular point", "local behavior"],
+      "preferred_symbols": ["indicial_polynomial", "local_basis_monomials", "local_basis_expansions"],
+      "prompt_rules": [
+        "Return the specific local object requested: indicial polynomial, monomials, or expansions.",
+        "Keep the evaluation point explicit in the generated code.",
+        "If the notation is QQ(x)[y][Dy], construct the coefficient ring as R.<x> = QQ['x']; Q.<y> = Frac(R)[] (or R.fraction_field()[]), then build A.<Dy> = OreAlgebra(Q).",
+        "If the notation is QQ(x,y)[Dy], construct R.<x,y> = QQ[] and set Q = R.fraction_field() before A.<Dy> = OreAlgebra(Q)."
+      ],
+      "tuning_params": []
+    },
+    {
+      "id": "B4_multivariate_ideal_groebner_basis",
+      "family_id": "B",
+      "title": "Compute An Ore Left Ideal Or Groebner Basis",
+      "summary": "Construct a multivariate Ore left ideal, Groebner basis, elimination, or related ideal invariant.",
+      "keywords": ["groebner basis", "groebner", "buchberger", "left ideal", "annihilating ideal", "eliminate", "elimination", "intersection", "fglm", "vector_space_basis", "vector_space_dimension", "dimension of ideal"],
+      "preferred_symbols": ["OreAlgebra_generic.ideal", "OreLeftIdeal.groebner_basis", "OreLeftIdeal.eliminate", "fglm"],
+      "prompt_rules": [
+        "Build the left ideal explicitly with A.ideal([...]) before calling Groebner, elimination, or dimension methods.",
+        "When the request is basis-oriented, print the resulting Groebner basis or elimination output rather than only intermediate ideals."
+      ],
+      "tuning_params": ["infolevel", "solver", "early_termination"]
+    },
+    {
+      "id": "C1_closure_combinatorics",
+      "family_id": "C",
+      "title": "Derive Related Operators By Closure Combinatorics",
+      "summary": "Build annihilators for sums, products, powers, associates, or polynomial combinations.",
+      "keywords": ["symmetric_product", "symmetric_power", "symmetric square", "annihilator_of_associate", "annihilator_of_polynomial", "closure", "sum of solutions", "product of solutions", "square of a d-finite solution", "annihilator for the square", "square of a known solution"],
+      "preferred_symbols": ["symmetric_power", "symmetric_product", "annihilator_of_associate", "annihilator_of_polynomial", "lclm"],
+      "prompt_rules": [
+        "Treat the task as an exact symbolic annihilator-construction problem.",
+        "Prefer the most direct closure operation instead of chaining multiple unrelated steps."
+      ],
+      "tuning_params": []
+    },
+    {
+      "id": "C2_algebra_conversion",
+      "family_id": "C",
+      "title": "Convert Between Operator Algebras",
+      "summary": "Compute annihilators under integral/composition or convert between differential and recurrence forms.",
+      "keywords": ["annihilator_of_integral", "annihilator_of_composition", "to_s", "to_d", "to_f", "to_t", "convert to recurrence", "taylor coefficients", "taylor-coefficient recurrence", "coefficient-side recurrence"],
+      "preferred_symbols": ["annihilator_of_integral", "annihilator_of_composition", "to_S", "to_D", "to_F", "to_T"],
+      "prompt_rules": [
+        "Use the conversion method that matches the requested representation change.",
+        "For multi-step derivations, keep each transformed operator visible in stdout.",
+        "If the user asks for downstream coefficients or terms after conversion, continue with the recurrence-side computation instead of stopping after the converted operator.",
+        "For to_S conversions, build the source differential algebra with Dx and the target recurrence algebra with Sn.",
+        "When the question asks for Taylor coefficients or first terms after to_S, use to_list on the resulting recurrence operator with explicit initial values."
+      ],
+      "tuning_params": []
+    },
+    {
+      "id": "D1_evaluate_dfinite_object",
+      "family_id": "D",
+      "title": "Evaluate A D-Finite Function Or Sequence",
+      "summary": "Approximate or evaluate a D-finite object through its higher-level interface.",
+      "keywords": ["dfinitefunction", "d-finite function", "d-finite sequence", "dfinite sequence", "approx", "evaluate d-finite function", "evaluate d-finite sequence"],
+      "preferred_symbols": ["DFiniteFunction.approx", "UnivariateDFiniteFunction.evaluate"],
+      "prompt_rules": [
+        "Prefer the D-finite abstraction when the user asks about a function or sequence rather than a raw operator.",
+        "Print the final evaluated value explicitly."
+      ],
+      "tuning_params": ["prec", "post_transform", "derivative order n"]
+    },
+    {
+      "id": "D2_compute_sequence_terms",
+      "family_id": "D",
+      "title": "Compute Sequence Terms From A Recurrence",
+      "summary": "Generate first terms or isolated large terms from a recurrence and initial values.",
+      "keywords": ["to_list", "forward_matrix_bsplit", "first terms", "sequence terms", "initial values", "initial value", "nth term", "compute terms", "first values"],
+      "preferred_symbols": ["to_list", "forward_matrix_bsplit"],
+      "prompt_rules": [
+        "Use to_list for concrete first-N term requests.",
+        "Use forward_matrix_bsplit when the user wants isolated large-n or high-precision terms.",
+        "If the sequence terms come from an earlier conversion or guessing step, print the resulting list as the final output instead of stopping at the intermediate operator.",
+        "If the user also asks to infer or identify the recurrence, keep that recurrence visible in stdout before printing the term list."
+      ],
+      "tuning_params": ["n", "start", "append", "padd"]
+    },
+    {
+      "id": "E1_numerical_eval_differential_solution",
+      "family_id": "E",
+      "title": "Evaluate A Differential Solution Numerically",
+      "summary": "Numerically evaluate a differential-operator solution at a point or along a path.",
+      "keywords": ["numerical_solution", "evaluate at", "evaluate the solution", "differential operator", "solution of", "path", "initial condition", "initial conditions", "f(0)", "analytic solution"],
+      "preferred_symbols": ["numerical_solution", "series_sum", "Path", "EvaluationPoint"],
+      "prompt_rules": [
+        "Make the operator, initial conditions, and evaluation point or path explicit.",
+        "When a numeric answer is the goal, print the computed value clearly."
+      ],
+      "tuning_params": ["eps", "path", "post_transform"]
+    },
+    {
+      "id": "E2_transition_matrix_analytic_continuation",
+      "family_id": "E",
+      "title": "Compute Transition Matrices Or Follow Analytic Continuation Paths",
+      "summary": "Continue solutions along a path or compute a transition matrix between local bases.",
+      "keywords": ["numerical_transition_matrix", "analytic continuation", "transition matrix", "continue along a path", "local bases"],
+      "preferred_symbols": ["numerical_transition_matrix", "Path", "analytic_continuation"],
+      "prompt_rules": [
+        "Keep the path explicit and ordered in the code.",
+        "Treat path-dependent continuation as distinct from single-point evaluation."
+      ],
+      "tuning_params": ["eps", "path"]
+    },
+    {
+      "id": "F1_guess_from_data",
+      "family_id": "F",
+      "title": "Guess A Recurrence Or Differential Equation From Data",
+      "summary": "Infer an operator from sequence terms or sampled coefficients.",
+      "keywords": ["guess", "guess_rec", "guess_deq", "guess_raw", "guess recurrence", "guess differential equation", "sampled data", "recover recurrence", "infer a recurrence", "infer an operator", "recover an operator", "annihilates", "annihilator", "annihilating", "find a recurrence", "find recurrence", "sequence defined by", "annihilates the sequence"],
+      "preferred_symbols": ["guess", "guess_rec", "guess_deq", "guess_raw", "OreAlgebra"],
+      "prompt_rules": [
+        "Make the data and target algebra explicit before guessing.",
+        "If a default guess call fails, narrow the search window instead of abandoning the task.",
+        "If the user asks to continue the sequence after guessing, use the guessed recurrence to print the requested terms.",
+        "When the question asks for both the inferred recurrence and predicted terms, print both the guessed operator and the resulting term list.",
+        "If the user asks to find an operator that annihilates a sequence, generate enough terms of the sequence as a list and use guess(data, A) to discover the annihilating operator. Prefer guess(data, A) over guess_rec(data, n, Sn) because guess_rec has coercion issues on some data."
+      ],
+      "tuning_params": ["path", "min_order", "max_order", "min_degree", "max_degree"]
+    },
+    {
+      "id": "G1_advanced_symbolic",
+      "family_id": "G",
+      "title": "Advanced Symbolic Workflow",
+      "summary": "Handle later-phase workflows such as telescoping or desingularization.",
+      "keywords": ["creative telescoping", "telescoping", "telescoper", "desingularization", "desingularize", "nullspace", "sage_native", "advanced symbolic", "apparent singularities", "remove apparent singularities"],
+      "preferred_symbols": ["desingularize", "creative_telescoping", "sage_native", "gauss"],
+      "prompt_rules": [
+        "These workflows are expert-mode and should stay narrow and explicit.",
+        "If context is weak, say what additional evidence is needed."
+      ],
+      "tuning_params": []
+    },
+    {
+      "id": "G2_multivariate_creative_telescoping",
+      "family_id": "G",
+      "title": "Run Multivariate Creative Telescoping",
+      "summary": "Compute telescopers, and optionally certificates, from a multivariate annihilating ideal.",
+      "keywords": ["creative telescoping", "telescoper", "telescoping ideal", "ct", "certificate", "certificates", "multiple sum", "multiple integral", "diagonal", "annihilating ideal"],
+      "preferred_symbols": ["OreLeftIdeal.ct", "creative telescoping", "OreAlgebra_generic.ideal"],
+      "prompt_rules": [
+        "Start from the annihilating ideal in a multivariate Ore algebra, then apply ct or creative telescoping to the elimination variable.",
+        "If the user asks for certificates, keep the telescoper/certificate pair explicit in stdout."
+      ],
+      "tuning_params": ["certificates", "infolevel", "solver", "early_termination"]
+    }
+  ]
+}

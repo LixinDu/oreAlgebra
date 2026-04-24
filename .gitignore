@@ -1,0 +1,71 @@
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+
+# Virtual environments and local env files
+.venv/
+venv/
+.env
+.env.*
+
+# Test/tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/experiments/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local agent/runtime state
+.claude/
+.rag/
+.temp/
+out/
+logs/
+scripts_log/
+benchmarks/
+
+# Shared generated outputs from the main app
+generated/*
+!generated/.gitkeep
+
+# Test-matrix data under test_matrix/generated/ is intentionally tracked.
+# Ignore only volatile local state and restore backups.
+test_matrix/generated/last_batch_run.json
+test_matrix/generated/*.before_restore
+test_matrix/generated/*.bak
+test_matrix/.source_history/
+
+# External documents and local-only writing artifacts
+data/*.pdf
+docs/ARCHITECTURE_NOTE.md
+docs/WORK_LOG.md
+
+# ISSAC working artifacts
+issac26/main.pdf
+issac26/main.log
+issac26/main.synctex.gz
+issac26/main.aux
+issac26/main.bbl
+issac26/main.bcf
+issac26/main.blg
+issac26/main.run.xml
+issac26/texput.log
+
+# Local helper scripts
+scripts/push-public.sh
+scripts/download_ore_guide.sh
