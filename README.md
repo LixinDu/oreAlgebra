@@ -22,7 +22,6 @@ local guide PDFs.
 
 - `streamlit_chat_app.py`: main chat UI
 - `streamlit_app.py`: retrieval-only UI
-- `ore_rag_assistant.py`: index-building CLI
 
 The real implementations live under `ui/` and `core/`. The root files are
 convenient entrypoints.
@@ -119,11 +118,20 @@ streamlit run streamlit_chat_app.py
 The public chat UI defaults to the combined `both` index. If you build a
 different index, change the `Index path` field in the sidebar.
 
+To use the chat UI, choose a provider and either enter the key in the sidebar
+or set it in your environment / `.env` file:
+
+- OpenAI: `OPENAI_API_KEY`
+- Gemini: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+- Ollama: no API key required, but a local Ollama server is needed
+
 Retrieval-only UI:
 
 ```bash
 streamlit run streamlit_app.py
 ```
+
+The retrieval-only UI does not require an LLM API key.
 
 ## Notes
 
